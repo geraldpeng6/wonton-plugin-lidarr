@@ -75,7 +75,7 @@ configs:
     file: mail.sh
 
 x-wonton:
-  spec: "0.11"
+  spec: "0.12"
   id: com.lidarr.lidarr
   version: 0.1.0
   kind: app
@@ -111,8 +111,9 @@ x-wonton:
   # 别的插件（以及以后的 Agent）经 x-wonton.lidarr 能力访问 Lidarr 的 REST API（/api/v1）。
   provides:
     x-wonton.lidarr: { service: lidarr, port: 8686 }
-  # 下载要 torrent_client 能力提供的 qBittorrent；没有提供方装不上。
-  requires: [torrent_client]
+  # 下载要 torrent_client 能力提供的 qBittorrent。提供能力的插件不能 requires 别的能力，
+  # 只能 wants：有提供方就接上登记成下载客户端，没有时 Lidarr 照常装（手动管理仍可用）。
+  wants: [torrent_client]
   permissions:
     # 元数据来自上游的元数据服务（MusicBrainz 的代理）和歌词、封面等外部源，要出网。
     - network.egress
