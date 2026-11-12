@@ -6,7 +6,7 @@
 # identity_check 模拟首次打开：经应用 API 开启 Forms 并建 SMOKE_OWNER 的管理员账号，再断言应用认出主人。
 # API 要 X-Api-Key：认证未开时从 /initialize.json 取；开了先 POST /login（表单），应用 Cookie 落在 dweb
 # 的会话 jar 里，再取 initialize.json。凭据与数据标记都写在标记文件里，按行分键。
-web_assert() { grep -qi '<title>Lidarr'; }   # 标准输入：SPA 首页 HTML 的标题
+web_assert() { grep -qiE '<title>(Lidarr|Login - Lidarr)</title>'; }   # 标准输入：SPA 首页或登录页（认证开着时 / 会 302 到 /login）
 
 lidarr_marker() { # 标记文件：SMOKE_STATE 是文件就用它，是目录就放里面（dev.sh probes 的 .wonton）
   if [[ -n "${SMOKE_STATE:-}" && -d "$SMOKE_STATE" ]]; then
@@ -25,11 +25,13 @@ lidarr_cred() { # <键>：标记里的单项
   sed -n "s/^$1=//p" "$m" | tail -1
 }
 
-lidarr_marker_set() { # <键> <值>：改写标记里的一项，保留其它行
+lidarr_marker_set() { # <键> <值>：改写标记里的一项，保留其它行；值可能含 /（路径），不用 sed 拼
   local m
   m="$(lidarr_marker)" || return 1
   if [[ -f "$m" ]] && grep -q "^$1=" "$m"; then
-    sed -i "s/^$1=.*/$1=$2/" "$m"
+    grep -v "^$1=" "$m" >"$m.tmp" || true
+    printf '%s=%s\n' "$1" "$2" >>"$m.tmp"
+    mv "$m.tmp" "$m"
   else
     printf '%s=%s\n' "$1" "$2" >>"$m"
   fi
@@ -68,8 +70,9 @@ lidarr_api() { # <方法> <路径> [请求体]：经网关调应用 API，带 X-
 lidarr_session() { # 自铸核心会话：网关认出用户才转发 sso:none 应用的请求。e2e 的 extra_check 和
   # 升级保数据的 data_write 都跑在套件 web_login 之前，jar 里还没有核心会话，先用主人令牌换一个
   # （同 qbittorrent 探针的 qbit_session；来源白名单只免主人的浏览器，不免这里的程序化请求）。
+  # dev.sh probes 只跑 data 项时不导出 SMOKE_WEB_URL：网页 origin 自己拼（<slug>.<base 域名>）。
   local web jar token base
-  web="${E2E_WEB_URL:-${SMOKE_WEB_URL:?SMOKE_WEB_URL 未导出}}"
+  web="${E2E_WEB_URL:-${SMOKE_WEB_URL:-http://${SMOKE_SLUG:?SMOKE_SLUG 未导出}.${SMOKE_BASE#http://}}}"
   web="${web%/}"
   jar="${E2E_JAR:-${SMOKE_JAR:?SMOKE_JAR 未导出}}"
   token="${E2E_TOKEN:-${SMOKE_TOKEN:-}}"
@@ -119,7 +122,7 @@ identity_check() { # sso:none 约定：首次打开设管理员，断言应用�
 }
 
 data_write() { # 把 /music 登记成 Lidarr 的根目录，作为要保住的用户数据（也顺带证明 music 挂载可写）
-  local list created id out
+  local list created id out qp mp
   list="$(lidarr_api_ready)" || return 1
   # 幂等：先删掉上次留下的同路径根目录，再登记一个。
   local old
@@ -127,7 +130,13 @@ data_write() { # 把 /music 登记成 Lidarr 的根目录，作为要保住的�
   if [[ -n "$old" ]]; then
     lidarr_api DELETE "rootfolder/$old" >/dev/null || { echo "删旧根目录失败（id=$old）"; return 1; }
   fi
-  if ! out="$(lidarr_api POST rootfolder '{"path":"/music"}')"; then
+  # 3.x 的根目录要 name 和默认档案 id（取应用自带的第一个）。
+  qp="$(lidarr_api GET qualityprofile | jq -r '[.[]][0].id // empty')" ||
+    { echo "读质量档案失败"; return 1; }
+  mp="$(lidarr_api GET metadataprofile | jq -r '[.[]][0].id // empty')" ||
+    { echo "读元数据档案失败"; return 1; }
+  [[ -n "$qp" && -n "$mp" ]] || { echo "应用里没有质量/元数据档案（id 空）"; return 1; }
+  if ! out="$(lidarr_api POST rootfolder "{\"name\":\"music\",\"path\":\"/music\",\"defaultQualityProfileId\":$qp,\"defaultMetadataProfileId\":$mp,\"defaultMonitorOption\":\"all\",\"defaultNewItemMonitorOption\":\"all\"}")"; then
     echo "登记根目录失败：$out"; return 1
   fi
   created="$out"
@@ -189,11 +198,12 @@ extra_check() { # 发信端到端：应用的「测试」接口真发一封通�
 		<<<"$conn" >/dev/null 2>&1 ||
 		echo "（提示）Email 连接的 server 不是 smtp.wonton.internal：$(jq -c '[.fields[] | select(.name == "server" or .name == "to")]' <<<"$conn")"
 	# 等待先挂后台再触发（模板的用法）：信进私聊是秒级投递，先等后发才等得到。
-	lidarr_room_wait 120 "Lidarr：" & wp=$!
+	# 核心投递的消息第一行是“<插件标题>：<邮件主题>”，用应用的测试信主题认这封信。
+	lidarr_room_wait 120 "Lidarr - Test Notification" & wp=$!
 	# 触发一封真实测试信：应用用它自己配好的 SMTP（内部邮箱）发给收件人。
 	resp="$(lidarr_api POST notification/test "$conn")" ||
 		{ kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null; echo "测试信请求失败：$(head -c 200 <<<"$resp")"; return 1; }
 	# 核心把信投进主人的「Wonton」私聊：房里出现这一封。
 	wait "$wp" || { echo "测试信 120 秒没出现在主人的 Wonton 私聊（房里没这封信）"; return 1; }
-	echo "测试信已进主人的 Wonton 私聊（Lidarr：…，收件人 $to）"
+	echo "测试信已进主人的 Wonton 私聊（Lidarr - Test Notification，收件人 $to）"
 }
