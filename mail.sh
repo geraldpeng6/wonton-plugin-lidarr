@@ -111,7 +111,7 @@ while :; do
   sleep 5
 done
 
-# 测试信只发一次、只记日志：发不出去（比如核心 SMTP 还没就绪）不影响安装，之后的信照常发。
+# 测试信只发一次、只记日志：发不出去（比如核心 SMTP 未就绪）不影响安装，之后的信照常发。
 code=$(curl --noproxy '*' -sS -H "X-Api-Key: $key" -H 'Content-Type: application/json' \
   -d "$enabled" -o /tmp/mail-test.json -w '%{http_code}' "$api/notification/test" || true)
 case "$code" in

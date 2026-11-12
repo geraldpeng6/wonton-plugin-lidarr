@@ -30,7 +30,7 @@ services:
     stop_grace_period: 30s
 
   # 一次性服务：把 torrent_client 能力（qBittorrent Web API v2）登记成 Lidarr 的下载客户端。
-  # 能力核心还没合入：WONTON_TORRENT_CLIENT_URL 没注入时如实说明并跳过，装得上、其他功能照常。
+  # WONTON_TORRENT_CLIENT_URL 没注入时如实说明并跳过登记（provision.sh 同样），装得上、其他功能照常。
   provision:
     image: linuxserver/lidarr:3.1.6@sha256:a91ef0642c15c9bd7c4260fee98fa99972c61601e37c8a96411d6a9cf0e9ad40
     entrypoint: ["/bin/sh", "/provision.sh"]
